@@ -17,6 +17,8 @@ Arduino digital pins 0-7 are the outputs of the LEDs
 Arduino digital 8 is the "advance LED" switch
 Arduino digital 12 is the "reverse LED" switch
 Arduino digital 10 disables all LEDs
+Arduino digital 9 (portb.1) is the output of timer1
+Arduino digital 11 (portb.3) is the output of timer2
 
 Configuring Buttons:
 The buttons use a basic state machine type configuration to advance and reverse LEDs. 
@@ -29,6 +31,9 @@ switch results in the previous LED being lit. Pressing the final switch disables
 Goal is to be able to use three switches and a bank of up to 8 LEDs to control (via functions) and indicate (via LEDs) the 
 output/output state
 
+Learned:
+Each time a frequency is changed you want to do an = not a |= on each register, then |= (or) subsequent changes. 
+Otherwise the previous values (like prescaler) will be OR'd in, resulting in incorrect register values.
 
 */
 
@@ -38,7 +43,7 @@ output/output state
 typedef unsigned char	u8;
 typedef signed short	s16;
 
-#define	XTAL		8e6		// 8MHz
+#define	XTAL		16e6		// 8MHz
 
 #define KEY_PIN		PINB
 #define KEY_PORT	PORTB
@@ -99,13 +104,17 @@ void zero_output(){
 	
 	LED_PORT = 0B00000000;
 	frequency_led_state = LED_PORT;
-	TCCR1A |= (0 <<COM1A0); //turn off bits in compare match to toggle.
-	TCCR2A |= (0 <<COM2A0); //turn off bits in compare match to toggle.
+	TCCR1A = (0 <<COM1A0); //turn off bits in compare match to toggle.
+	TCCR1B = (0 << WGM12);
+	TCCR2A = (0 <<COM2A0); //turn off bits in compare match to toggle.
+	TCCR2A = (0 << WGM21);
 	
 }
 
+
+
 void set_timer1_2300(){
-	TCCR1B |= (1 << CS10); // set prescaler to 0
+	TCCR1B = (1 << CS10); // set prescaler to 0
 	TCCR1B |= (1 << WGM12); //put timer 1 in ctc mode a mode where the top is defined in register OCR1A
 	TCCR1A |= (1 <<COM1A0); // turn on bits in compare match to toggle.
 	OCR1A = 3478; // 2300 Hz
@@ -114,7 +123,7 @@ void set_timer1_2300(){
 }
 
 void set_timer1_40000(){
-	TCCR1B |= (1 << CS10); // set prescaler to 0
+	TCCR1B = (1 << CS10); // set prescaler to 0
 	TCCR1B |= (1 << WGM12); //put timer 1 in ctc mode a mode where the top is defined in register OCR1A
 	TCCR1A |= (1 <<COM1A0); // turn on bits in compare match to toggle.
 	OCR1A = 200; // 40000 Hz
@@ -128,7 +137,7 @@ void set_timer1_39215(){
 }
 
 void set_timer1_1000000(){
-	TCCR1B |= (1 << CS10); // set prescaler to 0
+	TCCR1B = (1 << CS10); // set prescaler to 0
 	TCCR1B |= (1 << WGM12); //put timer 1 in ctc mode a mode where the top is defined in register OCR1A
 	TCCR1A |= (1 <<COM1A0); // turn on bits in compare match to toggle.
 	OCR1A = 8; //1000000
@@ -136,21 +145,21 @@ void set_timer1_1000000(){
 }
 
 void set_timer2_3012(){
-	TCCR2B |= (1 << CS21) |(1 << CS20); // set prescaler to 32
+	TCCR2B = (1 << CS21) |(1 << CS20); // set prescaler to 32
 	TCCR2A |= (1 << WGM21); //put timer 2 in ctc mode a mode where the top is defined in register OCR2A
 	TCCR2A |= (1 <<COM2A0); // turn on bits in compare match to toggle.
 	OCR2A = 83; //set value to trigger compare match. this determines the frequency
 }
 
 void set_timer2_40000(){
-	TCCR2B |= (1 << CS21); // set prescaler to 8
+	TCCR2B = (1 << CS21); // set prescaler to 8
 	TCCR2A |= (1 << WGM21); //put timer 2 in ctc mode a mode where the top is defined in register OCR2A
 	TCCR2A |= (1 <<COM2A0); // turn on bits in compare match to toggle.
 	OCR2A = 24; //set value to trigger compare match. this determines the frequency
 }
 
 void set_timer2_1000000(){
-	TCCR2B |= (1 << CS20); // set prescaler to 0
+	TCCR2B = (1 << CS20); // set prescaler to 0
 	TCCR2A |= (1 << WGM21); //put timer 2 in ctc mode a mode where the top is defined in register OCR2A
 	TCCR2A |= (1 <<COM2A0); // turn on bits in compare match to toggle.
 	OCR2A = 8; //set value to trigger compare match. this determines the frequency
