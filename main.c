@@ -10,11 +10,35 @@
 #include <util\atomic.h>		// need "--std=c99"
 #include <avr/io.h>
 
+/*
+
+Hooking up the wires:
+Arduino digital pins 0-7 are the outputs of the LEDs
+Arduino digital 8 is the "advance LED" switch
+Arduino digital 12 is the "reverse LED" switch
+Arduino digital 10 disables all LEDs
+
+Configuring Buttons:
+The buttons use a basic state machine type configuration to advance and reverse LEDs. 
+Functions can be called for each state, configured independently, though probably ideally symmetrically
+in advance_output() and reverse_output()
+
+Feature: 
+Can go forward, back, and disable LEDs. pressing one switch advances the lit LED. Pressing the other 
+switch results in the previous LED being lit. Pressing the final switch disables all LEDs.
+Goal is to be able to use three switches and a bank of up to 8 LEDs to control (via functions) and indicate (via LEDs) the 
+output/output state
+
+
+*/
+
+
+
 
 typedef unsigned char	u8;
 typedef signed short	s16;
 
-#define	XTAL		16e6		// 16MHz
+#define	XTAL		8e6		// 8MHz
 
 #define KEY_PIN		PINB
 #define KEY_PORT	PORTB
@@ -75,6 +99,8 @@ void zero_output(){
 	
 	LED_PORT = 0B00000000;
 	frequency_led_state = LED_PORT;
+	TCCR1A |= (0 <<COM1A0); //turn off bits in compare match to toggle.
+	TCCR2A |= (0 <<COM2A0); //turn off bits in compare match to toggle.
 	
 }
 
