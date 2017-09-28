@@ -34,6 +34,13 @@ Configuring Buttons:
 The buttons use a basic state machine type configuration to advance and reverse LEDs. 
 Functions can be called for each state, configured independently, though probably ideally symmetrically
 in advance_output() and reverse_output()
+in rewrite the state machine needs to be fixed to ignore multiple on/off presses if an advance/reverse hasn't 
+occurred. Right now I'm doing that with a flag.
+Also in rewrite to decouple the led output from the frequency output
+Also in rewrite resuming after turning off the output should output the same frequency. It does that here
+but it's ugly
+this is major speghetti code
+
 
 Feature: 
 Can go forward, back, and disable LEDs. pressing one switch advances the lit LED. Pressing the other 
@@ -86,7 +93,7 @@ u8 output_enable = 0; //0 means off - 1 means continuous wave enabled - 2 means 
 
 volatile long toggle_interval =0;
 
-u8 advanced_or_reversed = 0;
+
 
 u8 get_key_press( u8 key_mask )
 {
@@ -192,9 +199,10 @@ void set_timer2_8000000(){
 
 
 void advance_output(){
-advanced_or_reversed = 1;	
+
 clear_timer1_and_timer2();
  if(output_enable ==1){
+		
 	
 	switch(frequency_led_state){
 		case 0b00000000:
@@ -259,8 +267,9 @@ clear_timer1_and_timer2();
 }
 
 void reverse_output(){
-  advanced_or_reversed = 1;	
+  
   if(output_enable ==1){
+
 	clear_timer1_and_timer2();
 	switch(frequency_led_state){
      
@@ -425,16 +434,16 @@ key_state = ~KEY_PIN;			// no action on keypress during reset
 					
 					//LED_PORT = 0B10000000;
 			       // frequency_led_state = LED_PORT;
-				   advanced_or_reversed = 0;
+				
 					break;
 				case 1:
 					clear_timer1_and_timer2();
 					output_enable=0;	
-					//LED_PORT = 0B00000000;
-			        //frequency_led_state = LED_PORT;
-					if(advanced_or_reversed == 1){ //this prevents multiple presses from shifting the frequency multiple times
-						frequency_led_state = frequency_led_state >> 1;
-					}
+					
+					//resets output to zero
+					LED_PORT = 0B00000000;
+			        frequency_led_state = LED_PORT;
+				
 					break;
 					
 				case 2:
