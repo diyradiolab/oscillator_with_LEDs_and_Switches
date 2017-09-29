@@ -259,7 +259,7 @@ clear_timer1_and_timer2();
 	    
 		
 	    case 0b01000000: //this is is the overflow value > change the frequency_led_state  value here to overflow at a different value
-			LED_PORT = 0B00000001;
+			LED_PORT = 0B00000000;
 			frequency_led_state = LED_PORT;
 			break;
 }
@@ -322,7 +322,7 @@ void reverse_output(){
 			break;
 
 	    case 0b00000001: //this is is the overflow value > change the frequency_led_state  value here to overflow at a different value
-			LED_PORT = 0B01000000;
+			LED_PORT = 0B00000000;
 			frequency_led_state = LED_PORT;
 			break;
 }
