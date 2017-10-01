@@ -1,14 +1,16 @@
 /************************************************************************/
 /*
 arduino digital pins 0-4 - output LEDs
-arduino digital pin 6 - toggle/interrupt signal enable - this can be thought of as interrupting the output signal
-arduino digital pin 7 - output and continuous wave enabled
+arduino digital pin 6 - toggle/interrupt signal enable LED - this can be thought of as interrupting the output signal
+arduino digital pin 7 - output and continuous wave enabled. LED
 pin 8 - output and continuous wave enabled
 pin 9 - output1
-pin 10 - toggle/interrupt signal enable - this can be thought of as interrupting the output signal
+pin 10 - toggle/interrupt signal enable switch - this can be thought of as interrupting the output signal.
 pin 11 - output2
-pin 12 - advance output to next state
-pin 13 - reverse output to previous state
+pin 12 - advance output to next state switch
+pin 13 - reverse output to previous state switch
+
+
 
 outputs are square waves at the following frequencies:
 selection	timer1	timer2
