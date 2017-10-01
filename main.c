@@ -1,16 +1,14 @@
 /************************************************************************/
 /*
 arduino digital pins 0-4 - output LEDs
-arduino digital pin 6 - toggle/interrupt signal enable LED - this can be thought of as interrupting the output signal
-arduino digital pin 7 - output and continuous wave enabled. LED
+arduino digital pin 6 - toggle/interrupt signal enable - this can be thought of as interrupting the output signal
+arduino digital pin 7 - output and continuous wave enabled
 pin 8 - output and continuous wave enabled
 pin 9 - output1
-pin 10 - toggle/interrupt signal enable switch - this can be thought of as interrupting the output signal.
+pin 10 - toggle/interrupt signal enable - this can be thought of as interrupting the output signal
 pin 11 - output2
-pin 12 - advance output to next state switch
-pin 13 - reverse output to previous state switch
-
-
+pin 12 - advance output to next state
+pin 13 - reverse output to previous state
 
 outputs are square waves at the following frequencies:
 selection	timer1	timer2
@@ -305,34 +303,11 @@ void reverse_output() {
 
 void set_frequency_indicator_LED() {
 
-    switch(CURRENT_OUTPUT_FREQUENCY_SELECTION_LED) {
-    case FREQ_TIMER1_39215_TIMER2_40000_LED:
-        PORTD &= 0B11000000; //turn off all pins but leave PORTD7 (THE POWER INDICATOR) alone
-        PORTD |= (1 << PORTD0); //enable PORTD0
-        break;
+uint8_t PORTD_FREQ_VALUE = 1 << CURRENT_OUTPUT_FREQUENCY_SELECTION_LED; //this bit shift raises the current output_frequency_selection_led value to the power of 2
+uint8_t PORTD_power_and_toggle_led_mask = 192; 
 
-    case FREQ_TIMER1_40000_TIMER2_40000_LED:
-        PORTD &= 0B11000000; //turn off all pins but leave PORTD7 (THE POWER INDICATOR) alone
-        PORTD |= (1 << PORTD1); //enable PORTD1
-        break;
-
-    case FREQ_TIMER1_2300_TIMER2_3012_LED:
-        PORTD &= 0B11000000; //turn off all pins but leave PORTD7 (THE POWER INDICATOR) alone
-        PORTD |= (1 << PORTD2); //enable PORTD2
-        break;
-
-    case FREQ_TIMER1_1000000_TIMER2_1000000_LED:
-        PORTD &= 0B11000000; //turn off all pins but leave PORTD7 (THE POWER INDICATOR) alone
-        PORTD |= (1 << PORTD3); //enable PORTD3
-        break;
-
-    case FREQ_TIMER1_8000000_TIMER2_8000000_LED:
-        PORTD &= 0B11000000; //turn off all pins but leave PORTD7 (THE POWER INDICATOR) alone
-        PORTD |= (1 << PORTD4); //enable PORTD4
-        break;
-
-
-    }
+PORTD &= PORTD_power_and_toggle_led_mask; //if these LEDs are lit leave them on
+PORTD |= (PORTD_FREQ_VALUE); //turn on frequency indicator LEDs
 
 }
 
@@ -366,14 +341,7 @@ void turn_on_timers() {
     set_timer2();
 }
 
-void turn_on_continous_wave_without_advancing_or_reversing_it() {
-    //this sets timer1 and timer2 without advancing them if KEY3 or KEY4 haven't been pressed
 
-
-    turn_on_timers();
-
-
-}
 
 void turn_off_continous_wave() {
     clear_timer1_and_timer2();
@@ -408,6 +376,7 @@ int main( void)
             //this clears the timer1 timer2 if output is disabled to turn off oscillators
             if(output_status == DISABLED && CURRENT_OUTPUT_FREQUENCY_SELECTION != -1) {
                 toggle_mode = DISABLED; //turn off toggle mode if it's running
+				PORTD &= ~(1 << PORTD6);
 
 
                 //turn of wave
@@ -437,18 +406,21 @@ int main( void)
 
                 //turn on toggle mode
                 case DISABLED:
-
+					PORTD |= (1 << PORTD6);
                     toggle_mode = ENABLED;
-                    PORTD |= (1 << PORTD6);
+                    
                     break;
 
                 //restore continuous wave function and disable toggle_mode
                 case ENABLED:
-                    if(output_status != 0) {
-                        turn_on_continous_wave_without_advancing_or_reversing_it();
+                   
+				    PORTD &= ~(1 << PORTD6);
+					
+					if(output_status != 0) {
+                        turn_on_timers();
                     }
                     toggle_mode = DISABLED;
-                    PORTD &= ~(1 << PORTD6);
+                    
                     break;
                 }
 
