@@ -10,11 +10,20 @@ pin 11 - output2
 pin 12 - advance output to next state
 pin 13 - reverse output to previous state
 
+outputs are square waves at the following frequencies:
+selection	timer1	timer2
+0			39215	40000
+1			40000	40000
+2           2300	3012
+3			1MHz	1MHz
+4			8MHz	8MHz
+
+
+
 future improvements
 don't use a toggle fuction with a state variable for the on/off button because then other functions that want to turn off the
-on/off button end up toggling the button if called more than once if they call it's encomapassing function
+on/off button end up toggling the button if called more than once
 it's just bad practice
-
 
                               */
 /*                                                                      */
