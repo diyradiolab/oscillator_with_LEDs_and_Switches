@@ -1,63 +1,30 @@
 /************************************************************************/
-/*                                                                      */
-/*                      Debouncing 8 Keys				*/
-/*			Sampling 4 Times				*/
-/*                                                                      */
-/*              Author: Peter Dannegger                                 */
+/*
+arduino digital pins 0-4 - output LEDs
+arduino digital pin 6 - toggle/interrupt signal enable - this can be thought of as interrupting the output signal
+arduino digital pin 7 - output and continuous wave enabled
+pin 8 - output and continuous wave enabled
+pin 9 - output1
+pin 10 - toggle/interrupt signal enable - this can be thought of as interrupting the output signal
+pin 11 - output2
+pin 12 - advance output to next state
+pin 13 - reverse output to previous state
+
+future improvements
+don't use a toggle fuction with a state variable for the on/off button because then other functions that want to turn off the
+on/off button end up toggling the button if called more than once
+
+
+                              */
 /*                                                                      */
 /************************************************************************/
 
-#include <util\atomic.h>		// need "--std=c99"
-#include <avr/io.h>
-
-/*
-
-Hooking up the wires:
-
-LEDs:
-Arduino digital pins 0-6 are the outputs of the LEDs
-Arduino digital pin 7 has 3 modes - off - on - and toggle --it is an output indicator
-
-Switches:
-Arduino digital 12 is the "reverse LED" switch
-Arduino digital 10 disables all LEDs
-Arduino digital 8 is the "advance LED" switch
-Arduino digital 13 is the "toggle output on digital pin 9" switch It doesn't affect digital pin 11
-
-
-Outputs:
-Arduino digital 9 (portb.1) is the output of timer1
-Arduino digital 11 (portb.3) is the output of timer2
-
-
-Configuring Buttons:
-The buttons use a basic state machine type configuration to advance and reverse LEDs. 
-Functions can be called for each state, configured independently, though probably ideally symmetrically
-in advance_output() and reverse_output()
-in rewrite the state machine needs to be fixed to ignore multiple on/off presses if an advance/reverse hasn't 
-occurred. Right now I'm doing that with a flag.
-Also in rewrite to decouple the led output from the frequency output
-Also in rewrite resuming after turning off the output should output the same frequency. It does that here
-but it's ugly
-this is major speghetti code
-
-
-Feature: 
-Can go forward, back, and disable LEDs. pressing one switch advances the lit LED. Pressing the other 
-switch results in the previous LED being lit. Pressing the final switch disables all LEDs.
-Goal is to be able to use three switches and a bank of up to 8 LEDs to control (via functions) and indicate (via LEDs) the 
-output/output state
-
-
-*/
+#include <util/atomic.h>		// need "--std=c99"
 
 
 
 
-typedef unsigned char	u8;
-typedef signed short	s16;
-
-#define	XTAL		16e6		// 16MHz
+#define	XTAL		16e6		// 8MHz
 
 #define KEY_PIN		PINB
 #define KEY_PORT	PORTB
@@ -83,408 +50,423 @@ typedef signed short	s16;
 #define LED7		7
 
 
-u8 key_state;				// debounced and inverted key state:
-					// bit = 1: key pressed
-u8 key_press;				// key press detect
-
-u8 frequency_led_state = 0b00000000; //these leds are turned on sequentially on portd0 1 2 3 4 5 7 8
-u8 output_enable = 0; //0 means off - 1 means continuous wave enabled - 2 means pulse wave enabled
+//for checking state of output
 
 
-volatile long toggle_interval =0;
+//define
+#define FREQ_2300 0
+#define FREQ_3012 1
+#define FREQ_40000 2
+#define FREQ_39125 3
+#define FREQ_1000000 4
+#define FREQ_8000000 5
+
+#define FREQ_TIMER1_39215_TIMER2_40000 0
+#define FREQ_TIMER1_40000_TIMER2_40000 1
+#define FREQ_TIMER1_2300_TIMER2_3012 2
+#define FREQ_TIMER1_1000000_TIMER2_1000000 3
+#define FREQ_TIMER1_8000000_TIMER2_8000000 4
+
+
+#define FREQ_TIMER1_39215_TIMER2_40000_LED 0
+#define FREQ_TIMER1_40000_TIMER2_40000_LED 1
+#define FREQ_TIMER1_2300_TIMER2_3012_LED 2
+#define FREQ_TIMER1_1000000_TIMER2_1000000_LED 3
+#define FREQ_TIMER1_8000000_TIMER2_8000000_LED 4
+
+
+#define MIN_LED_THAT_IS_FREQUENCY_INDICATOR  0
+#define MAX_LED_THAT_IS_FREQUENCY_INDICATOR  4
+
+#define MIN_OUTPUT_FREQUENCY_SELECTION 0
+#define MAX_OUTPUT_FREQUENCY_SELECTION 4
+
+#define DISABLE 0
+#define ENABLE 1
+
+#define DISABLED 0
+#define ENABLED 1
 
 
 
-u8 get_key_press( u8 key_mask )
+
+//globals:
+uint8_t output_status = 0; //this will be between 0 and 4
+uint8_t output_status_LED = 0;	//this variable will hold the current output state of the LED between 0 and 4
+int8_t CURRENT_OUTPUT_FREQUENCY_SELECTION = -1; //set as -1 so no frequency is selected when the device is turned on
+int8_t CURRENT_OUTPUT_FREQUENCY_SELECTION_LED = -1;
+uint8_t KEY3_OR_KEY4_WAS_PRESSED = 0;
+uint8_t toggle_mode = DISABLED;
+uint8_t toggle_interrupt_passes_counter = 0;
+uint8_t toggle_is_in_high_state = 0;
+
+uint8_t TOGGLE_FREQUENCY = 10; //Multiply this value by 20 (10*2) to get the period of the toggle functionality
+
+
+
+uint8_t key_state;				// debounced and inverted key state:
+// bit = 1: key pressed
+uint8_t key_press;				// key press detect
+
+
+ISR(TIMER0_COMPA_vect)		// every 10ms
 {
-  ATOMIC_BLOCK(ATOMIC_FORCEON){		// read and clear atomic !
-    key_mask &= key_press;		// read key(s)
-    key_press ^= key_mask;		// clear key(s)
-  }
-  return key_mask;
+    static uint8_t ct0 = 0xFF, ct1 = 0xFF;	// 8 * 2bit counters
+    uint8_t i;
+
+    i = ~KEY_PIN;				// read keys (low active)
+    i ^= key_state;			// key changed ?
+    ct0 = ~( ct0 & i );			// reset or count ct0
+    ct1 = ct0 ^ (ct1 & i);		// reset or count ct1
+    i &= ct0 & ct1;			// count until roll over ?
+    key_state ^= i;			// then toggle debounced state
+    key_press |= key_state & i;		// 0->1: key press detect
+
+//this is used by the toggle function that's called by pressing KEY2
+    if((toggle_interrupt_passes_counter > TOGGLE_FREQUENCY) && (toggle_mode == ENABLED) && (output_status == ENABLED)) {
+
+        //this switch just toggles the  output on/off each time the interrupt timer counter reaches 50
+        switch(toggle_is_in_high_state) {
+        case 0:
+            toggle_is_in_high_state = 1;
+            turn_on_timers();
+            toggle_interrupt_passes_counter = 0;
+            break;
+
+        case 1:
+            toggle_is_in_high_state = 0;
+            turn_off_continous_wave();
+            toggle_interrupt_passes_counter = 0;
+            break;
+        }
+
+    }
+
+    toggle_interrupt_passes_counter++;
 }
 
 
-
-void clear_timer1(){
-	LED_PORT = 0B00000000;
-	frequency_led_state = LED_PORT;
-	TCCR1B = 0x00;
-	TCCR1A = 0x00;
-	
+uint8_t get_key_press( uint8_t key_mask )
+{
+    ATOMIC_BLOCK(ATOMIC_FORCEON) {		// read and clear atomic !
+        key_mask &= key_press;		// read key(s)
+        key_press ^= key_mask;		// clear key(s)
+    }
+    return key_mask;
 }
 
-void clear_timer1_and_timer2(){
+void initialize_timer0() {
+    TCCR0A = 1<<WGM01;			// T0 Mode 2: CTC
+    TCCR0B = 1<<CS02^1<<CS00;		// divide by 1024
+    OCR0A = XTAL / 1024.0 * 10e-3 -1;	// 10ms
+    TIMSK0 = 1<<OCIE0A;			// enable T0 interrupt
+
+}
+
+void initilize_ports_and_leds() {
+    KEY_DDR = 0;				// input
+    KEY_PORT = 0xFF;			// pullups on
+    LED_PORT &= 0B00000000;			// LEDs off (low active)
+    LED_DDR = 0xFF;			// LED output
+    key_state = ~KEY_PIN;			// no action on keypress during reset
+    KEY_DDR |= (1<<PORTB1) | (1<<PORTB3); //set pb1 and pb3 outputs for oc1a and oc2a
+}
+
+
+void clear_timer1_and_timer2() {
     //clear all the registers
-	TCCR1B = 0b00000000;
-	TCCR1A = 0b00000000;
-	TCCR2B = 0b00000000;
-	TCCR2A = 0b00000000;
-	
+    TCCR1B = 0b00000000;
+    TCCR1A = 0b00000000;
+    TCCR2B = 0b00000000;
+    TCCR2A = 0b00000000;
+}
+
+void set_power_indicator_led() {
+    switch(output_status_LED) {
+
+
+    case DISABLED:
+        PORTD |= (1 << PORTD7); // PD7 goes high
+        output_status_LED = ENABLED; //this sets the output to status to enabled
+        break;
+
+    case ENABLED:
+        PORTD &= ~(1 << PORTD7); // PD7 goes low
+        output_status_LED = DISABLED; //this sets the output status to disabled
+        break;
+    }
+}
+
+void set_output_status() {
+
+    switch(output_status) {
+    case DISABLED:
+        output_status = ENABLED; //this sets the output to status to enabled
+        break;
+    case ENABLED:
+
+        output_status = DISABLED; //this sets the output status to disabled
+        break;
+    }
+
+}
+
+void advance_LED() {
+    if(CURRENT_OUTPUT_FREQUENCY_SELECTION_LED < MAX_LED_THAT_IS_FREQUENCY_INDICATOR) {
+        CURRENT_OUTPUT_FREQUENCY_SELECTION_LED +=1;
+    }
+    else {
+        CURRENT_OUTPUT_FREQUENCY_SELECTION_LED = CURRENT_OUTPUT_FREQUENCY_SELECTION_LED;
+    }
+}
+
+void reverse_LED() {
+    if(CURRENT_OUTPUT_FREQUENCY_SELECTION_LED > MIN_LED_THAT_IS_FREQUENCY_INDICATOR) {
+        CURRENT_OUTPUT_FREQUENCY_SELECTION_LED -=1;
+    }
+    else {
+        CURRENT_OUTPUT_FREQUENCY_SELECTION_LED = CURRENT_OUTPUT_FREQUENCY_SELECTION_LED;
+    }
+}
+
+void set_timer1() {
+
+
+    const int dividers[] = {204, 200, 3478, 8, 0}; // f = 39215, 40000, 2300, 1000000, 8000000
+    TCCR1B |= (1 << CS10); // set prescaler to 0
+    TCCR1B |= (1 << WGM12); //put timer 1 in ctc mode a mode where the top is defined in register OCR1A
+    TCCR1A |= (1 <<COM1A0); // turn on bits in compare match to toggle.
+    OCR1A = dividers[CURRENT_OUTPUT_FREQUENCY_SELECTION]; // correct divider to use
+}
+
+void set_timer2() {
+
+    const int dividers[] = {20, 20, 83, 8, 0}; //f = 40000, 40000, 3012, 1000000, 8000000
+
+
+    if (dividers[CURRENT_OUTPUT_FREQUENCY_SELECTION] == 83) {
+
+        TCCR2B |= (1 << CS21) |(1 << CS20); // set prescaler to 32
+    }
+
+    if (dividers[CURRENT_OUTPUT_FREQUENCY_SELECTION] == 20) {
+
+        TCCR2B |= (1 << CS21); // set prescaler to 8
+    }
+    else {
+
+        TCCR2B |= (1 << CS20); // set prescaler to 0
+    }
+
+
+
+    TCCR2A |= (1 << WGM21); //put timer 2 in ctc mode a mode where the top is defined in register OCR2A
+    TCCR2A |= (1 <<COM2A0); // turn on bits in compare match to toggle.
+    OCR2A = dividers[CURRENT_OUTPUT_FREQUENCY_SELECTION]; // correct divider to use
+}
+
+void advance_output() {
+
+    if(CURRENT_OUTPUT_FREQUENCY_SELECTION < MAX_OUTPUT_FREQUENCY_SELECTION) {
+        CURRENT_OUTPUT_FREQUENCY_SELECTION +=1;
+
+    }
+
+    if(CURRENT_OUTPUT_FREQUENCY_SELECTION == MAX_OUTPUT_FREQUENCY_SELECTION)
+        CURRENT_OUTPUT_FREQUENCY_SELECTION = MAX_OUTPUT_FREQUENCY_SELECTION;
+}
+
+void reverse_output() {
+
+
+
+    if(CURRENT_OUTPUT_FREQUENCY_SELECTION > MIN_OUTPUT_FREQUENCY_SELECTION) {
+
+        CURRENT_OUTPUT_FREQUENCY_SELECTION -=1;
+    }
+    else {
+        CURRENT_OUTPUT_FREQUENCY_SELECTION = CURRENT_OUTPUT_FREQUENCY_SELECTION;
+    }
 }
 
 
 
-void set_timer1_2300(){
-	TCCR1B |= (1 << CS10); // set prescaler to 0
-	TCCR1B |= (1 << WGM12); //put timer 1 in ctc mode a mode where the top is defined in register OCR1A
-	TCCR1A |= (1 <<COM1A0); // turn on bits in compare match to toggle.
-	OCR1A = 3478; // 2300 Hz
-	
-	
+void set_frequency_indicator_LED() {
+
+    switch(CURRENT_OUTPUT_FREQUENCY_SELECTION_LED) {
+    case FREQ_TIMER1_39215_TIMER2_40000_LED:
+        PORTD &= 0B11000000; //turn off all pins but leave PORTD7 (THE POWER INDICATOR) alone
+        PORTD |= (1 << PORTD0); //enable PORTD0
+        break;
+
+    case FREQ_TIMER1_40000_TIMER2_40000_LED:
+        PORTD &= 0B11000000; //turn off all pins but leave PORTD7 (THE POWER INDICATOR) alone
+        PORTD |= (1 << PORTD1); //enable PORTD1
+        break;
+
+    case FREQ_TIMER1_2300_TIMER2_3012_LED:
+        PORTD &= 0B11000000; //turn off all pins but leave PORTD7 (THE POWER INDICATOR) alone
+        PORTD |= (1 << PORTD2); //enable PORTD2
+        break;
+
+    case FREQ_TIMER1_1000000_TIMER2_1000000_LED:
+        PORTD &= 0B11000000; //turn off all pins but leave PORTD7 (THE POWER INDICATOR) alone
+        PORTD |= (1 << PORTD3); //enable PORTD3
+        break;
+
+    case FREQ_TIMER1_8000000_TIMER2_8000000_LED:
+        PORTD &= 0B11000000; //turn off all pins but leave PORTD7 (THE POWER INDICATOR) alone
+        PORTD |= (1 << PORTD4); //enable PORTD4
+        break;
+
+
+    }
+
 }
 
-void set_timer1_40000(){
-	TCCR1B |= (1 << CS10); // set prescaler to 0
-	TCCR1B |= (1 << WGM12); //put timer 1 in ctc mode a mode where the top is defined in register OCR1A
-	TCCR1A |= (1 <<COM1A0); // turn on bits in compare match to toggle.
-	OCR1A = 200; // 40000 Hz
+void advance_continous_wave() {
+
+    clear_timer1_and_timer2();
+    advance_LED();
+    set_frequency_indicator_LED();
+    advance_output();
+    if(output_status) {
+        turn_on_timers();
+    }
 }
 
-void set_timer1_39215(){
-	TCCR1B |= (1 << CS10); // set prescaler to 0
-	TCCR1B |= (1 << WGM12); //put timer 1 in ctc mode a mode where the top is defined in register OCR1A
-	TCCR1A |= (1 <<COM1A0); // turn on bits in compare match to toggle.
-	OCR1A = 204; //39215.5
+void reverse_continous_wave() {
+
+    clear_timer1_and_timer2();
+    reverse_LED();
+    set_frequency_indicator_LED();
+    reverse_output();
+
+    if(output_status && CURRENT_OUTPUT_FREQUENCY_SELECTION != -1) {
+        turn_on_timers();
+    }
+
 }
 
-void set_timer1_1000000(){
-	TCCR1B |= (1 << CS10); // set prescaler to 0
-	TCCR1B |= (1 << WGM12); //put timer 1 in ctc mode a mode where the top is defined in register OCR1A
-	TCCR1A |= (1 <<COM1A0); // turn on bits in compare match to toggle.
-	OCR1A = 8; //1000000
-	
+void turn_on_timers() {
+
+    set_timer1();
+    set_timer2();
 }
 
-void set_timer1_8000000(){
-	TCCR1B |= (1 << CS10); // set prescaler to 0
-	TCCR1B |= (1 << WGM12); //put timer 1 in ctc mode a mode where the top is defined in register OCR1A
-	TCCR1A |= (1 <<COM1A0); // turn on bits in compare match to toggle.
-	OCR1A = 0; //8000000
-	
+void turn_on_continous_wave_without_advancing_or_reversing_it() {
+    //this sets timer1 and timer2 without advancing them if KEY3 or KEY4 haven't been pressed
+
+
+    turn_on_timers();
+
+
 }
 
-
-	
-void set_timer2_3012(){
-	TCCR2B |= (1 << CS21) |(1 << CS20); // set prescaler to 32
-	TCCR2A |= (1 << WGM21); //put timer 2 in ctc mode a mode where the top is defined in register OCR2A
-	TCCR2A |= (1 <<COM2A0); // turn on bits in compare match to toggle.
-	OCR2A = 83; //set value to trigger compare match. this determines the frequency
-}
-
-void set_timer2_40000(){
-	TCCR2B |= (1 << CS21); // set prescaler to 8
-	TCCR2A |= (1 << WGM21); //put timer 2 in ctc mode a mode where the top is defined in register OCR2A
-	TCCR2A |= (1 <<COM2A0); // turn on bits in compare match to toggle.
-	OCR2A = 20; //set value to trigger compare match. this determines the frequency
-}
-
-void set_timer2_1000000(){
-	TCCR2B |= (1 << CS20); // set prescaler to 0
-	TCCR2A |= (1 << WGM21); //put timer 2 in ctc mode a mode where the top is defined in register OCR2A
-	TCCR2A |= (1 <<COM2A0); // turn on bits in compare match to toggle.
-	OCR2A = 8; //set value to trigger compare match. this determines the frequency
-	
-}
-
-void set_timer2_8000000(){
-	TCCR2B |= (1 << CS20); // set prescaler to 0
-	TCCR2A |= (1 << WGM21); //put timer 2 in ctc mode a mode where the top is defined in register OCR2A
-	TCCR2A |= (1 <<COM2A0); // turn on bits in compare match to toggle.
-	OCR2A = 0; //set value to trigger compare match. this determines the frequency
-	
-}
-
-
-
-void advance_output(){
-
-clear_timer1_and_timer2();
- if(output_enable ==1){
-		
-	
-	switch(frequency_led_state){
-		case 0b00000000:
-			LED_PORT = 0B00000001;
-			frequency_led_state = LED_PORT;
-			set_timer1_40000();
-			set_timer2_40000();
-			break;
-		
-		
-        case 0b00000001: //40kHz + -700 offset
-			LED_PORT = 0B00000010;
-			frequency_led_state = LED_PORT;
-			set_timer1_39215();
-			set_timer2_40000();
-			break;
-
-	    case 0b00000010: //3kHz + -700 offset
-			LED_PORT = 0B00000100;
-			frequency_led_state = LED_PORT;
-			set_timer1_2300();
-			set_timer2_3012();
-			break;
-		
-
-	    case 0b00000100: //both at 1 MHz
-			LED_PORT = 0B00001000;
-			frequency_led_state = LED_PORT;
-			set_timer1_1000000();
-			set_timer2_1000000();
-			break;
-		
-
-	    case 0b00001000:
-			LED_PORT = 0B00010000;
-			frequency_led_state = LED_PORT;
-			  set_timer1_8000000();
-			  set_timer2_8000000();
-			  
-			
-			break;
-		
-	    case 0b00010000:
-			LED_PORT = 0B00100000;
-			frequency_led_state = LED_PORT;
-			break;
-		
-	    case 0b00100000:
-			LED_PORT = 0B01000000;
-			frequency_led_state = LED_PORT;
-			break;
-
-
-	    
-		
-	    case 0b01000000: //this is is the overflow value > change the frequency_led_state  value here to overflow at a different value
-			LED_PORT = 0B00000000;
-			frequency_led_state = LED_PORT;
-			break;
-}
-}
-}
-
-void reverse_output(){
-  
-  if(output_enable ==1){
-
-	clear_timer1_and_timer2();
-	switch(frequency_led_state){
-     
-		
-        case 0b00000000:
-			LED_PORT = 0B01000000;
-			frequency_led_state = LED_PORT;
-			break;
-	 
-
-        case 0b01000000:
-			LED_PORT = 0B00100000;
-			frequency_led_state = LED_PORT;
-			break;
-
-	    case 0b00100000:
-			LED_PORT = 0B00010000;
-			frequency_led_state = LED_PORT;
-			set_timer1_8000000();
-			set_timer2_8000000();
-			  
-			break;
-
-	    case 0b00010000: //both at 1 MHz
-			LED_PORT = 0B00001000;
-			frequency_led_state = LED_PORT;
-			set_timer1_1000000();
-			set_timer2_1000000();
-			break;
-		
-	    case 0b00001000: //3kHz + -700 offset
-			LED_PORT = 0B00000100;
-			frequency_led_state = LED_PORT;
-			set_timer1_2300();
-			set_timer2_3012();		
-			break;
-		
-	    case 0b00000100: //40kHz + -700 offset
-			LED_PORT = 0B00000010;
-			frequency_led_state = LED_PORT;
-			set_timer1_39215();
-			set_timer2_40000();		
-			break;		
-	
-	    case 0b00000010: //both at 40kHz
-			LED_PORT = 0B00000001;
-			frequency_led_state = LED_PORT;
-			set_timer1_40000();
-			set_timer2_40000();
-			break;
-
-	    case 0b00000001: //this is is the overflow value > change the frequency_led_state  value here to overflow at a different value
-			LED_PORT = 0B00000000;
-			frequency_led_state = LED_PORT;
-			break;
-}
-}
-}
-
-void toggle_output(){
-	
-	if (toggle_interval >=500){
-	   set_timer1_39215(); //this is the output frequency
-	   LED_PORT = 0B10000000; //this is specific to the frequency set above - referenced in advance
-			
-	}
-
-	if (toggle_interval >=1000){
-	   clear_timer1();
-	   toggle_interval = 0;
-	  LED_PORT = 0B00000000;
-	  
-	}
+void turn_off_continous_wave() {
+    clear_timer1_and_timer2();
 }
 
 
-ISR( TIMER0_COMPA_vect )		// every 10ms
+
+
+
+
+int main( void)
 {
-  static u8 ct0 = 0xFF, ct1 = 0xFF;	// 8 * 2bit counters
-  u8 i;
 
-  i = ~KEY_PIN;				// read keys (low active)
-  i ^= key_state;			// key changed ?
-  ct0 = ~( ct0 & i );			// reset or count ct0
-  ct1 = ct0 ^ (ct1 & i);		// reset or count ct1
-  i &= ct0 & ct1;			// count until roll over ?
-  key_state ^= i;			// then toggle debounced state
-  key_press |= key_state & i;		// 0->1: key press detect
-  
-  
-	//this is patched in here badly maybe
-	//anyway - when enable_output is 2 this will call a function that toggles the output using the toggle_output function
-	if (output_enable ==2){
-		toggle_interval += 10;
-		toggle_output();
-  }
-  }
+    initialize_timer0();
+    initilize_ports_and_leds();
+    sei();
 
-
-int main( void )
-{
-  TCCR0A = 1<<WGM01;			// T0 Mode 2: CTC
-  TCCR0B = 1<<CS02^1<<CS00;		// divide by 1024
-  OCR0A = XTAL / 1024.0 * 10e-3 -1;	// 10ms
-  TIMSK0 = 1<<OCIE0A;			// enable T0 interrupt
-
-  //KEY_DDR = 0;				// input
-  //SET INPUTS
- // KEY_DDR |= (1<<PB0) | (1<<PB1);	
-   KEY_DDR |= (0<<PB0) | (0<<PB2) | (0<<PB4) |(0<<PB5);
-
-  KEY_PORT = 0xFF;			// pullups on
-  LED_PORT = 0x00;			// LEDs off (low active)
-  
-	//LED_DDR = 0xFF;			// LED output
-    //SET OUTPUTS
-  LED_DDR |= (1<<PD0) | (1<<PD1) | (1<<PD2) | (1<<PD3) | (1<<PD4) | (1 <<PD5) | (1<<PD6) | (1<<PD7);
-  KEY_DDR |= (1<<PB1) | (1<<PB3); //set pb1 and pb3 outputs for oc1a and oc2a
-
-   
-    
-key_state = ~KEY_PIN;			// no action on keypress during reset
-  sei();
+    for(;;) {					// main loop
 
 
 
 
-  for(;;){					// main loop
-	
-	//OR and AND arduino pin 7 with the LED output - this keeps led pin 7 lit-OFF-or toggling depending on output_enable's state
-	
-	if(output_enable ==1){
-	LED_PORT |= 0B10000000;
-	}
-	if(output_enable == 0){
-	LED_PORT &= 0B00000000;
-	}
-	
-	
-	 if( get_key_press( 1<<KEY0 ))
-
-	
-		{
-	
-			advance_output();
-
-		}
 
 
-    if( get_key_press( 1<<KEY1 ))
-		
-		{
-			
-		}
 
-    if( get_key_press( 1<<KEY2 ))
+        if(get_key_press( 1<<KEY0)) {
+            KEY3_OR_KEY4_WAS_PRESSED = 0;
 
-		{
-			switch (output_enable){
-				case 0:
-						output_enable =1;
-					
-					//LED_PORT = 0B10000000;
-			       // frequency_led_state = LED_PORT;
-				
-					break;
-				case 1:
-					clear_timer1_and_timer2();
-					output_enable=0;	
-					
-					//resets output to zero
-					LED_PORT = 0B00000000;
-			        frequency_led_state = LED_PORT;
-				
-					break;
-					
-				case 2:
-					clear_timer1_and_timer2();
-					output_enable =0;
-					
-					break;
-					
-		}
-		}
+            set_power_indicator_led();
+            set_output_status();
+
+            //this clears the timer1 timer2 if output is disabled to turn off oscillators
+            if(output_status == DISABLED && CURRENT_OUTPUT_FREQUENCY_SELECTION != -1) {
+                toggle_mode = DISABLED; //turn off toggle mode if it's running
 
 
-/*
-    if( get_key_press( 1<<KEY3 ))
+                //turn of wave
+                turn_off_continous_wave();
+            }
 
-		{
-			LED_PORT ^= 1<<LED3;
+            if(output_status == ENABLED && CURRENT_OUTPUT_FREQUENCY_SELECTION != -1 && KEY3_OR_KEY4_WAS_PRESSED ==0) {
 
-		}
-*/
+                //turn on wave if output frequency hasn't been changed via key3 or key4
 
-    if( get_key_press( 1<<KEY4 ))
+                turn_on_timers();
 
-    {
+            }
+        }
 
-	    reverse_output();
-	
-		}
 
-   if( get_key_press( 1<<KEY5 )){
-      output_enable = 2;
-	 
-	 
-	  
-   }
-/*
-    if( get_key_press( 1<<KEY6 ))
-      LED_PORT ^= 1<<LED6;
 
-    if( get_key_press( 1<<KEY7 ))
-      LED_PORT ^= 1<<LED7;
-*/
-  }
+        /*if( get_key_press( 1<<KEY1 ))
+        LED_PORT ^= 1<<LED1;
+        */
+        if( get_key_press( 1<<KEY2 ))
+        {
+
+            if(output_status == ENABLED && (CURRENT_OUTPUT_FREQUENCY_SELECTION !=-1)) {
+
+                switch(toggle_mode) {
+
+                //turn on toggle mode
+                case DISABLED:
+
+                    toggle_mode = ENABLED;
+                    PORTD |= (1 << PORTD6);
+                    break;
+
+                //restore continuous wave function and disable toggle_mode
+                case ENABLED:
+                    if(output_status != 0) {
+                        turn_on_continous_wave_without_advancing_or_reversing_it();
+                    }
+                    toggle_mode = DISABLED;
+                    PORTD &= ~(1 << PORTD6);
+                    break;
+                }
+
+            }
+        }
+
+
+
+        if( get_key_press( 1<<KEY3 ))
+        {}
+
+        if( get_key_press( 1<<KEY4 )) {
+            KEY3_OR_KEY4_WAS_PRESSED =1; //this flag is referenced by key0 when enabled/disables the output to make sure frequency hasn't changed
+            advance_continous_wave();
+
+        }
+
+
+
+        if( get_key_press( 1<<KEY5 )) {
+            KEY3_OR_KEY4_WAS_PRESSED =1;
+            reverse_continous_wave();
+
+
+        }
+
+        if( get_key_press( 1<<KEY6 ))
+            LED_PORT ^= 1<<LED6;
+
+        if( get_key_press( 1<<KEY7 ))
+            LED_PORT ^= 1<<LED7;
+    }
 }
