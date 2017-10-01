@@ -12,7 +12,8 @@ pin 13 - reverse output to previous state
 
 future improvements
 don't use a toggle fuction with a state variable for the on/off button because then other functions that want to turn off the
-on/off button end up toggling the button if called more than once
+on/off button end up toggling the button if called more than once if they call it's encomapassing function
+it's just bad practice
 
 
                               */
